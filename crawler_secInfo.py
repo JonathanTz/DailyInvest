@@ -38,7 +38,7 @@ def getMaxMktDate(con):
     return ret
 
 # 爬取下市下櫃資訊至DB
-def updateDelistData(con,pDate):
+def cra_DelistInfo(con,pDate):
     # 爬取下櫃資料
     my_data = {'stk_code':'' ,
             'select_year': 'ALL',
@@ -83,21 +83,28 @@ def covtSecPxToDB(conn,sec, dtStart, nDay=-60):
     dtNowOri = datetime.strptime(dtStart,'%Y%m%d')+timedelta(days = 1)
     dtNow = int(dtNowOri.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
     dtStartOri = datetime.strptime(dtStart,'%Y%m%d')+timedelta(days = nDay)
-    dtStart = int(dtStartOri.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    dtStartNew = int(dtStartOri.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
     df_stkInfo = pd.DataFrame(columns=['dtT', 'pxOpen', 'pxHigh', 'pxLow', 'pxClose'])
-    urls = f"https://ws.api.cnyes.com/ws/api/v1/charting/history?symbol=TWS:{idTicker}:STOCK&resolution=D&quote=1&from={dtNow}&to={dtStart}"
+    urls = f"https://ws.api.cnyes.com/ws/api/v1/charting/history?symbol=TWS:{idTicker}:STOCK&resolution=D&quote=1&from={dtNow}&to={dtStartNew}"
     
 
     res = requests.get(urls)
     data = res.text
     jFile = json.loads(data)
     if jFile['statusCode']==200:
+        #delete data
+        sql = ''' delete from securityPrice where seqsec = ? and dtMkt between ? and ? '''
+        cur = conn.cursor()
+        cur.execute(sql, (str(sec),str(datetime.strftime(datetime.strptime(dtStart,'%Y%m%d'),'%Y-%m-%d')),str(datetime.strftime(dtStartOri,'%Y-%m-%d'))))
+        
+        conn.commit()
+        #insert data
         df_stkInfo=pd.DataFrame({'dtMkt':[datetime.fromtimestamp(item) for item in jFile['data']['t']], 'pxOpen':jFile['data']['o'], 'pxHigh':jFile['data']['h'], 'pxLow':jFile['data']['l'], 'pxClose':jFile['data']['c'], 'volume':jFile['data']['v']})        
         df_stkInfo['seqSec'] = sec
         df_stkInfo['tpSrc'] = 'cnyes'
         df_stkInfo['dtMkt'] = pd.to_datetime(df_stkInfo['dtMkt']).dt.strftime('%Y-%m-%d')
         df_stkInfo.set_index(keys = ["seqSec","dtMkt","tpSrc"],inplace=True)
-        df_stkInfo.to_sql('securityPrice', con=conn, if_exists='replace',index=True)
+        df_stkInfo.to_sql('securityPrice', con=conn, if_exists='append',index=True)
 
     
     return df_stkInfo
@@ -109,28 +116,52 @@ def getSecID(con,sec):
     for row in rows:
         ret = row[0]
     return ret
+# 更新欲取價證券註記
+def updateSecTagOn(con, pStk):
+    for idStk in pStk:
+        sql = ''' update securityInfo set tpData = 'Y'  where idTicker = ?'''
+        cur = con.cursor()
+        cur.execute(sql, [idStk])
+        con.commit()
+
+# 取得股票陣列券次編號
+def getStkSeq(con):
+    cur = con.cursor()
+    cur.execute("select seqSec from securityInfo where tpData='Y' ")
+    rows = cur.fetchall()
+    aSeq = [row[0] for row in rows]
+    return aSeq
 
 # 主程式 ----Begin
 start_time = time.time()  # 開始時間
-conn = sqlite3.connect("D:/Data/Sqlite/MDEngine.db")  #建立資料庫連線
+#建立資料庫連線
+conn = sqlite3.connect('/Users/jonathantz/Documents/Project/Database/MDEngine.db')  
+#主程式
+if __name__ == '__main__':
+    
+    # Initiate
+    # 更新上市櫃清單(排除下市櫃)
+    dtMax = getMaxMktDate(conn)
+    if dtMax == None:
+        df_bak = cra_SecInfo(2)
+        df_SQL = pd.concat([df_bak,cra_SecInfo(4)])
+        df_SQL.to_sql('securityInfo', con=conn, if_exists='append',index=False)
+    else:
+        df_bak = cra_SecInfo(2)
+        df_SQL = pd.concat([df_bak,cra_SecInfo(4)])
+        df_SQL = df_SQL[df_SQL.dtPublic>dtMax]
+        df_SQL.to_sql('securityInfo', con=conn, if_exists='append',index=False)
+    df_Delist = cra_DelistInfo(conn,dtMax)
 
-# Initiate
-# 更新上市櫃清單(排除下市櫃)
-dtMax = getMaxMktDate(conn)
-if dtMax == None:
-    df_bak = cra_SecInfo(2)
-    df_SQL = pd.concat([df_bak,cra_SecInfo(4)])
-    df_SQL.to_sql('securityInfo', con=conn, if_exists='append',index=False)
-else:
-    df_bak = cra_SecInfo(2)
-    df_SQL = pd.concat([df_bak,cra_SecInfo(4)])
-    df_SQL = df_SQL[df_SQL.dtPublic>dtMax]
-    df_SQL.to_sql('securityInfo', con=conn, if_exists='append',index=False)
-df_Delist = updateDelistData(conn,dtMax)
+# 更新註記
+# aryStk = ['2070','8069','2441','5351','2454','6274','2616']
+#updateSecTagOn(conn,aryStk)
+aStk = getStkSeq(conn)
+dtNow = datetime.now().strftime('%Y%m%d')
+for ticker in aStk:
+    covtSecPxToDB(conn,ticker,dtNow,-100)
 
-# 取價
-a = covtSecPxToDB(conn,'12','20220218')
-
-
+    # EX: 取價
+    # a = covtSecPxToDB(conn,'12','20220218')
 end_time = time.time()
 print(f"{end_time - start_time} 秒")

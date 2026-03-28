@@ -1,3 +1,23 @@
 raw
 report
+venvDailyInvest
 *.csv
+
+# Python 暫存檔
+__pycache__/
+*.py[cod]
+*$py.class
+vanev/
+venv/
+.venv/
+
+# 資料庫檔案 (如果你希望手動備份而不是用 Git 追蹤頻繁變動的 DB)
+*.sqlite
+*.db
+
+# 數據抓取產生的暫存檔
+*.json
+logs/
+
+# 作業系統產生的檔案
+.DS_Store

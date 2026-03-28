@@ -1,0 +1,77 @@
+##Inert Trade
+# insert into equitydetail values ('6139','亞翔',237.5,'2024-08-14')
+# insert into tradelist values('2024-01-25','3587','股票','1','買入',250856,1000,0,250856,'',1)
+# insert into tradelist values('2024-07-03','6139','股票','1','買入',259369,1000,0,259369,'',1)
+#
+# 1|2023-07-02|申購|220573.8|18000|75879||1||2023-07-02 07:33:40
+# update appuserinfo set totalcost=441147.6+835169.1,qtyhld=111879 where sequser=1;
+# insert into appusertrans values(1,'2023-07-02','申購',441147.6,36000,111879,'',1,'',date())
+# 
+# update pflist_bak set totalamt=totalamt+441147.6 where dtupdate>'2023-07-02';
+# update hldlist set avgpxcost=(avgpxcost+250.856)/2,qtyhld=2000 where idticker='3587' and dthld='2024-08-14';
+# insert into hldlist values ('2024-08-14','6139','亞翔',259.369,1000,237.5,-21869,1)
+# update pflist_bak set totalamt=totalamt-250856-259369 where dtupdate>'2024-08-14';
+#
+#----------20240908
+# insert into tradelist values('2024-09-08','2301','股票','1','現金股利',5002,2000,0,5002,'',1)
+# insert into tradelist values('2024-09-08','6274','股票','1','現金股利',3997,1000,0,3997,'',1);
+# insert into tradelist values('2024-09-08','6180','股票','1','現金股利',3270,1000,0,3270,'',1);
+# insert into tradelist values('2024-09-08','3587','股票','1','現金股利',17843,2000,0,17843,'',1);
+# insert into tradelist values('2024-09-08','8069','股票','1','現金股利',4479,1000,0,4479,'',1);
+# insert into tradelist values('2024-09-08','2301','股票','1','現金股利',3990,2000,0,3990,'',1);
+# update pflist_bak set totalAmt=totalAmt+38581,amtRcg=amtRcg+38581 where dtupdate>'2024-08-30';
+# --------20241006
+# insert into tradelist values('2024-10-01','6139','股票','1','現金股利',8972,1000,0,8972,'',1);
+# update pflist_bak set totalAmt=totalAmt+8972,amtRcg=amtRcg+8972 where dtupdate>'2024-10-01';
+# --------20250922
+# insert into tradelist values('2025-08-11','5351','股票','1','賣出',94421,3193,0,94421,'',1)
+# update pflist_bak set totalAmt=totalAmt+94421,amtRcg=amtRcg-29097 where dtupdate>'2025-08-11';
+# delete hldlist where idticker='5351' and dthld>'2025-08-11';
+#
+# insert into tradelist values('2025-09-11','2301','股票','1','現金股利',3990,2000,0,3990,'',1);
+# insert into tradelist values('2025-08-08','6180','股票','1','現金股利',5990,1000,0,5990,'',1);
+# insert into tradelist values('2025-08-29','3587','股票','1','現金股利',13868,1000,0,13868,'',1);
+# insert into tradelist values('2025-08-21','8069','股票','1','現金股利',4980,1000,0,4980,'',1);
+# insert into tradelist values('2025-09-11','2301','股票','1','現金股利',5003,2000,0,5003,'',1);
+# insert into tradelist values('2025-05-21','6274','股票','1','現金股利',6493,1000,0,6493,'',1);
+# update pflist_bak set totalAmt=totalAmt+40324,amtRcg=amtRcg+40324 where dtupdate>'2025-09-11';
+# 
+# insert into tradelist values('2025-09-30','6139','股票','1','現金股利',13875,1000,0,13875,'',1);
+# update pflist_bak set totalAmt=totalAmt+13875,amtRcg=amtRcg+13875 where dtupdate>'2025-09-30';
+# insert into tradelist values('2025-10-03','6180','股票','1','賣出',60333,1000,0,60333,'',1);
+# update pflist_bak set totalAmt=totalAmt+60333,amtRcg=amtRcg+(60333-90428) where dtupdate>'2025-10-03';
+# delete from hldlist where idticker='6180' and dthld>'2025-10-03';
+
+# insert into equitydetail values ('3231','緯創',154.5,'2025-10-09');
+# insert into tradelist values('2025-10-09','3231','股票','1','買入',309440,2000,0,309440,'',1);
+# update pflist_bak set totalamt=totalamt-309440,mvhld=mvhld+309440 where dtupdate>'2025-10-09';
+# insert into hldlist values ('2025-10-09','3231','緯創',154.5,2000,145.5,19727,1)
+
+# --------20250922
+# insert into tradelist values('2025-12-31','8069','股票','1','賣出',197124,1000,0,197124,'',1);
+# update pflist_bak set totalAmt=totalAmt+197124,amtRcg=amtRcg+121116 where dtupdate>'2025-12-30';
+# delete from hldlist where idticker='8069' and dthld>'2025-12-30';
+
+# insert into tradelist values('2025-12-31','2301','股票','1','賣出',323562,2000,0,323562,'',1);
+# update pflist_bak set totalAmt=totalAmt+323562,amtRcg=amtRcg+114265 where dtupdate>'2025-12-30';
+# delete from hldlist where idticker='2301' and dthld>'2025-12-30';
+
+
+#---MDENGINE 2026-01-11
+#insert into securityinfo values(1854,'0050','元大台灣50','','上市','','TW','Y','2026-01-01 00:00:00','','2026-01-01 00:00:00');
+#update securityinfo set tpdata='Y' where idticker='2408';
+
+#---FP 2026-01-11
+delete from hldlist where dthld>'2026-01-08';
+delete from pflist_bak where dtupdate>'2026-01-09';
+
+
+insert into equitydetail values ('0050','元大台灣50',46.1365,'2026-01-08');
+insert into tradelist values('2026-01-08','0050','股票','1','買入',68282,1480,0,68282,'',1);
+update pflist_bak set totalamt=totalamt-68282,mvhld=mvhld+68282 where dtupdate>'2026-01-07';
+insert into hldlist values ('2026-01-08','0050','元大台灣50',46.1365,1480,46.1365,68282,1);
+
+insert into equitydetail values ('2408','南亞科',197.2805,'2026-01-08');
+insert into tradelist values('2026-01-08','2408','股票','1','買入',394561,2000,0,394561,'',1);
+update pflist_bak set totalamt=totalamt-394561,mvhld=mvhld+394561 where dtupdate>'2026-01-07';
+insert into hldlist values ('2026-01-08','2408','南亞科',197.2805,2000,197.2805,394561,1);
