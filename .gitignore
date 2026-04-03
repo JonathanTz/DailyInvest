@@ -22,4 +22,4 @@ logs/
 # 作業系統產生的檔案
 .DS_Store
 
-record
+record.txt
