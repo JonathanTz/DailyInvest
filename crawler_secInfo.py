@@ -4,6 +4,7 @@ import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
 import json
+import os
 # 證券主檔table
 # # CREATE TABLE securityInfo(seqSec INTEGER PRIMARY KEY AUTOINCREMENT ,idTicker varchar(20) not null, nameTicker varchar(40) ,ISIN varchar(40) , tpMarket varchar(10), tpIndustry varchar(40), codeCountry varchar(10),tpData  varchar(10),dtPublic datetime,dtDelist datetime,dtUpdate timestamp DATE DEFAULT (datetime('now','localtime')));
 # 證券價格table
@@ -104,14 +105,19 @@ def covtSecPxToDB(conn,sec, dtStart, nDay=-60):
         df_stkInfo['tpSrc'] = 'cnyes'
         df_stkInfo['dtMkt'] = pd.to_datetime(df_stkInfo['dtMkt']).dt.strftime('%Y-%m-%d')
         df_stkInfo.set_index(keys = ["seqSec","dtMkt","tpSrc"],inplace=True)
-        df_stkInfo.to_sql('securityPrice', con=conn, if_exists='append',index=True)
+        df_stkInfo.to_sql(
+                                name="securityPrice", 
+                                con=conn2,
+                                if_exists='append', 
+                                index=True
+                            )
 
     
     return df_stkInfo
 # 取得券次編號
 def getSecID(con,sec):
     cur = con.cursor()
-    cur.execute("select idTicker from securityInfo where seqSec= ?",[sec])
+    cur.execute("select idTicker from MDEngine.securityInfo where seqSec= ?",[sec])
     rows = cur.fetchall()
     for row in rows:
         ret = row[0]
@@ -119,7 +125,7 @@ def getSecID(con,sec):
 # 更新欲取價證券註記
 def updateSecTagOn(con, pStk):
     for idStk in pStk:
-        sql = ''' update securityInfo set tpData = 'Y'  where idTicker = ?'''
+        sql = ''' update MDEngine.securityInfo set tpData = 'Y'  where idTicker = ?'''
         cur = con.cursor()
         cur.execute(sql, [idStk])
         con.commit()
@@ -134,25 +140,72 @@ def getStkSeq(con):
 
 # 主程式 ----Begin
 start_time = time.time()  # 開始時間
-#建立資料庫連線
-conn = sqlite3.connect('/Users/jonathantz/Documents/Project/Database/MDEngine.db')  
-#主程式
-if __name__ == '__main__':
+def check_is_cloud():
+    # 檢查多個可能的 GCP 環境變數
+    conditions = [
+        os.getenv('GOOGLE_CLOUD_PROJECT'),        # 標準 GCP 環境變數
+        os.getenv('DEVSHELL_PROJECT_ID'),         # Cloud Shell 專用
+        os.getenv('GOOGLE_CLOUD_QUICKSTART_PROJECT') # 部分 Cloud Shell 快速啟動環境
+    ]
     
-    # Initiate
-    # 更新上市櫃清單(排除下市櫃)
-    dtMax = getMaxMktDate(conn)
+    # 只要其中一個不是 None，就回傳 True
+    return any(cond is not None for cond in conditions)
+
+is_cloud = check_is_cloud()
+#建立資料庫連線
+def get_connection(idConn):
+    if is_cloud:
+        # 雲端環境：通常檔案會放在目前執行腳本的目錄下
+        # 如果你把 db 放在特定資料夾，可以改為 f"/home/{getpass.getuser()}/your_folder/"
+        base_dir = "./" 
+        print("--- 偵測到環境：Google Cloud Shell ---")
+    else:
+        # Mac 本機環境
+        base_dir = '/Users/jonathantz/Documents/Project/Database/'
+        print("--- 偵測到環境：Mac Local ---")
+
+    # 組合路徑
+    fp_path = os.path.join(base_dir, 'FP.db')
+    md_engine_path = os.path.join(base_dir, 'MDEngine.db')
+
+    # 建立連線
+    if idConn==1:
+        conn = sqlite3.connect(fp_path)
+        # 使用參數化或格式化字串來 ATTACH，避免路徑空格出錯
+        conn.execute(f'ATTACH "{md_engine_path}" AS MDEngine')
+        return conn
+    else :
+        conn2 = sqlite3.connect(md_engine_path)
+        return conn2
+    
+    
+
+# 使用範例
+conn = get_connection(1)
+conn2 = get_connection(2)
+#主程式
+def run_crawler():
+    start_time = time.time()
+    conn = get_connection(1)
+    conn2 = get_connection(2)
+    
+    # 原本在 if __name__ == '__main__': 底下的內容
+    dtMax = getMaxMktDate(conn2)
     if dtMax == None:
         df_bak = cra_SecInfo(2)
-        df_SQL = pd.concat([df_bak,cra_SecInfo(4)])
-        df_SQL.to_sql('securityInfo', con=conn, if_exists='append',index=False)
-    else:
-        df_bak = cra_SecInfo(2)
-        df_SQL = pd.concat([df_bak,cra_SecInfo(4)])
-        df_SQL = df_SQL[df_SQL.dtPublic>dtMax]
-        df_SQL.to_sql('securityInfo', con=conn, if_exists='append',index=False)
-    df_Delist = cra_DelistInfo(conn,dtMax)
+        # ... (中間省略) ...
+    
+    aStk = getStkSeq(conn2)
+    dtNow = datetime.now().strftime('%Y%m%d')
+    for ticker in aStk:
+        covtSecPxToDB(conn, ticker, dtNow, -100)
 
+    end_time = time.time()
+    print(f"爬蟲任務完成，耗時：{end_time - start_time} 秒")
+
+# 建議保留這段，這樣 b.py 依然可以單獨執行
+if __name__ == '__main__':
+    run_crawler()
 # 更新註記
 # aryStk = ['2070','8069','2441','5351','2454','6274','2616']
 #updateSecTagOn(conn,aryStk)

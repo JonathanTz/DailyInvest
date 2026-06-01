@@ -10,10 +10,44 @@ import matplotlib.dates as dates
 import os
 import crawler_secInfo
 
-dir = "C:\\Users\\Dell\\Documents\\Visual Studio 2015\\Projects\\FinPortfolio\\FinPortfolio\\bin\\Debug\\"
 dir = '/Users/jonathantz/Documents/Project/Database/'
-conn = sqlite3.connect(dir +'FP.db')
-conn.execute('ATTACH "'+ dir +'MDEngine.db" AS MDEngine')
+def check_is_cloud():
+    # 檢查多個可能的 GCP 環境變數
+    conditions = [
+        os.getenv('GOOGLE_CLOUD_PROJECT'),        # 標準 GCP 環境變數
+        os.getenv('DEVSHELL_PROJECT_ID'),         # Cloud Shell 專用
+        os.getenv('GOOGLE_CLOUD_QUICKSTART_PROJECT') # 部分 Cloud Shell 快速啟動環境
+    ]
+    
+    # 只要其中一個不是 None，就回傳 True
+    return any(cond is not None for cond in conditions)
+# 判斷邏輯：檢查是否存在 GCP 特有的環境變數
+is_cloud = check_is_cloud()
+def get_connection():
+    if is_cloud:
+        # 雲端環境：通常檔案會放在目前執行腳本的目錄下
+        # 如果你把 db 放在特定資料夾，可以改為 f"/home/{getpass.getuser()}/your_folder/"
+        base_dir = "./" 
+        print("--- 偵測到環境：Google Cloud Shell ---")
+    else:
+        # Mac 本機環境
+        base_dir = '/Users/jonathantz/Documents/Project/Database/'
+        print("--- 偵測到環境：Mac Local ---")
+
+    # 組合路徑
+    fp_path = os.path.join(base_dir, 'FP.db')
+    md_engine_path = os.path.join(base_dir, 'MDEngine.db')
+
+    # 建立連線
+    conn = sqlite3.connect(fp_path)
+    
+    # 使用參數化或格式化字串來 ATTACH，避免路徑空格出錯
+    conn.execute(f'ATTACH "{md_engine_path}" AS MDEngine')
+    
+    return conn
+
+# 使用範例
+conn = get_connection()
 
 def getStkPrice(item,dtStart,dtEnd):
    item = (f"{item}:STOCK") if item != 'TWSE' else (f"{item}:INDEX")
@@ -80,10 +114,6 @@ def covtMktToPF(con):
       print(cursor.lastrowid)
       print("--3--End MktPrice Update Local")
 
-   #cursor = con.execute(sql)
-
-
-
 
 
 def calPortfolioRisk(df_input, n = 10):
@@ -112,8 +142,9 @@ def calPortfolioRisk(df_input, n = 10):
    df_idx['ret'] = ((df_idx.pxClose-df_idx.shift(1).pxClose)/df_idx.shift(1).pxClose)
    #投組beta --- cor/(p.std/m.std)
    # valBeta = np.corrcoef(df_latPortfolio.ret[1:],df_idx.ret[1:])[0][1] /(df_latPortfolio.ret[1:].std()/df_idx.ret[1:].std())
-   df_latPortfolio_ret = pd.concat([df_latPortfolio.set_index(['dtT'])['ret'][1:],df_idx.set_index(['dtT'])['ret'][1:]],axis=1).fillna(method='ffill')
-   df_latPortfolio_amtHld = pd.concat([df_latPortfolio.set_index(['dtT'])['amtHld'],df_idx.set_index(['dtT'])['ret']],axis=1).fillna(method='ffill')
+   # 直接把 .fillna(method='ffill') 改成 .ffill()
+   df_latPortfolio_ret = pd.concat([df_latPortfolio.set_index(['dtT'])['ret'][1:],df_idx.set_index(['dtT'])['ret'][1:]],axis=1).ffill()
+   df_latPortfolio_amtHld = pd.concat([df_latPortfolio.set_index(['dtT'])['amtHld'],df_idx.set_index(['dtT'])['ret']],axis=1).ffill()
    valBeta = df_latPortfolio_ret.corr().iloc[0,1]/(df_latPortfolio.ret[1:].std()/df_idx.ret[1:].std())
    #投組報酬波動度
    valVol = df_latPortfolio_ret.values.std()
@@ -135,6 +166,7 @@ def calPortfolioRisk(df_input, n = 10):
    ##plt.show()
    # return df_latPortfolio
    return df_input
+crawler_secInfo.run_crawler()
 #update 市場資料庫股價至投組資料庫
 covtMktToPF(conn)
 c = conn.cursor()

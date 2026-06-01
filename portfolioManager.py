@@ -37,7 +37,7 @@ def manage_portfolio():
             stock_name = input("輸入欲買進的股票名稱: ")
             buy_qty = float(input("買進數量: "))
             buy_amt = float(input("買進總價: "))
-            dtTrade = input("交易日期: ")
+            dtTrade = input("交易日期yyyy-mm-dd: ")
             pxBuy=buy_amt/buy_qty
             
             # 先檢查剩餘股數
