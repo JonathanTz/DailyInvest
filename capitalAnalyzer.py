@@ -1,3 +1,4 @@
+# capitalAnalyzer.py
 import sqlite3
 import pandas as pd
 import math
@@ -8,218 +9,195 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as dates
 import os
+
+# 💡 移除舊的 crawler_secInfo 連線依賴，直接引入統一的 db_manager
+from db_manager import get_connection
+# 依然保留 crawler_secInfo 的腳本觸發功能
 import crawler_secInfo
 
-dir = '/Users/jonathantz/Documents/Project/Database/'
-def check_is_cloud():
-    # 檢查多個可能的 GCP 環境變數
-    conditions = [
-        os.getenv('GOOGLE_CLOUD_PROJECT'),        # 標準 GCP 環境變數
-        os.getenv('DEVSHELL_PROJECT_ID'),         # Cloud Shell 專用
-        os.getenv('GOOGLE_CLOUD_QUICKSTART_PROJECT') # 部分 Cloud Shell 快速啟動環境
-    ]
+# 使用範例：取得統一的 ATTACH 連線
+conn = get_connection(1)
+
+def getStkPrice(item, dtStart, dtEnd):
+    item = (f"{item}:STOCK") if item != 'TWSE' else (f"{item}:INDEX")
+    urls = f"https://ws.api.cnyes.com/ws/api/v1/charting/history?symbol=TWS:{item}&resolution=D&quote=1&from={dtEnd}&to={dtStart}" 
+    res = requests.get(urls)
+    data = res.text
+    jFile = json.loads(data)
     
-    # 只要其中一個不是 None，就回傳 True
-    return any(cond is not None for cond in conditions)
-# 判斷邏輯：檢查是否存在 GCP 特有的環境變數
-is_cloud = check_is_cloud()
-def get_connection():
-    if is_cloud:
-        # 雲端環境：通常檔案會放在目前執行腳本的目錄下
-        # 如果你把 db 放在特定資料夾，可以改為 f"/home/{getpass.getuser()}/your_folder/"
-        base_dir = "./" 
-        print("--- 偵測到環境：Google Cloud Shell ---")
-    else:
-        # Mac 本機環境
-        base_dir = '/Users/jonathantz/Documents/Project/Database/'
-        print("--- 偵測到環境：Mac Local ---")
+    df_input = pd.DataFrame({
+        'idTicker': [item for i in jFile['data']['t']], 
+        'dtT': [datetime.fromtimestamp(t) for t in jFile['data']['t']], 
+        'pxOpen': jFile['data']['o'], 
+        'pxHigh': jFile['data']['h'], 
+        'pxLow': jFile['data']['l'], 
+        'pxClose': jFile['data']['c']
+    })
+    df_input['dtT'] = pd.to_datetime(df_input['dtT'].dt.date)
+    return df_input.sort_values(by=['dtT'])
 
-    # 組合路徑
-    fp_path = os.path.join(base_dir, 'FP.db')
-    md_engine_path = os.path.join(base_dir, 'MDEngine.db')
-
-    # 建立連線
-    conn = sqlite3.connect(fp_path)
-    
-    # 使用參數化或格式化字串來 ATTACH，避免路徑空格出錯
-    conn.execute(f'ATTACH "{md_engine_path}" AS MDEngine')
-    
-    return conn
-
-# 使用範例
-conn = get_connection()
-
-def getStkPrice(item,dtStart,dtEnd):
-   item = (f"{item}:STOCK") if item != 'TWSE' else (f"{item}:INDEX")
-   urls = f"https://ws.api.cnyes.com/ws/api/v1/charting/history?symbol=TWS:{item}&resolution=D&quote=1&from={dtEnd}&to={dtStart}" 
-   res = requests.get(urls)
-   data = res.text
-   jFile = json.loads(data)
-   df_input=pd.DataFrame({'idTicker': [item for i in jFile['data']['t']], 'dtT':[datetime.fromtimestamp(item) for item in jFile['data']['t']], 'pxOpen':jFile['data']['o'], 'pxHigh':jFile['data']['h'], 'pxLow':jFile['data']['l'], 'pxClose':jFile['data']['c']})
-   df_input['dtT'] = pd.to_datetime(df_input['dtT'].dt.date)
-   return df_input.sort_values(by=['dtT'])
 def covtMktToPF(con):
-   print("--1--Start MktPrice Update Local")
-   sql = "Insert into equityDetail \
-          select distinct M.idTicker,M.nameTicker,P.pxClose,P.dtMkt from MDEngine.securityInfo M \
-          inner join MDEngine.securityPrice P on M.seqsec=P.seqsec \
-          inner join (select idTicker,Max(dtMkt) dtMax from equitydetail group by idTicker) G on M.idticker=G.idticker \
-          where M.tpData='Y' and G.dtMax<P.dtMkt order by P.dtMkt desc"
+    print("--1--Start MktPrice Update Local")
+    sql = """
+        Insert into equityDetail 
+        select distinct M.idTicker, M.nameTicker, P.pxClose, P.dtMkt 
+        from MDEngine.securityInfo M 
+        inner join MDEngine.securityPrice P on M.seqsec = P.seqsec 
+        inner join (select idTicker, Max(dtMkt) dtMax from equitydetail group by idTicker) G on M.idticker = G.idticker 
+        where M.tpData = 'Y' and G.dtMax < P.dtMkt 
+        order by P.dtMkt desc
+    """
+    cursor = con.execute(sql)
+    con.commit()
+    print(cursor.lastrowid)
+    print("--1--End MktPrice Update Local")
 
-   cursor = con.execute(sql)
-   con.commit()
-   print(cursor.lastrowid)
-   print("--1--End MktPrice Update Local")
+    print("--2--Start Porfolio Update Price")
+    c = con.cursor()
+    cursor = c.execute("SELECT MAX(dtHld) dtHldMax FROM hldList")
+    dtHldMax = cursor.fetchone()[0] or ""
+    
+    cursor = c.execute("SELECT MAX(dtMkt) dtMktMax FROM equityDetail")
+    dtMktMax = cursor.fetchone()[0] or ""
+    
+    if dtHldMax < dtMktMax:
+        sql_hld = f"""
+            SELECT E.dtMkt, H.idTicker, H.nameTicker, H.avgPxCost, H.qtyHld, E.pxClose, (E.pxClose - H.avgPxCost) * H.qtyHld as urcg, '1' 
+            FROM hldList H 
+            inner join equityDetail E on H.idticker = E.idTicker 
+            WHERE E.dtMkt > '{dtHldMax}' and H.dtHld = '{dtHldMax}'
+            order by E.idticker, E.dtMkt
+        """
+        cursor = c.execute(sql_hld)
+        
+        # 💡 最佳化：改用 List 收集字典後一次轉換為 DataFrame，避免在迴圈中不斷使用 pd.concat 造成效能瓶頸
+        hld_data = []
+        for row in cursor:
+            hld_data.append({
+                'dtHld': row[0], 'idTicker': row[1], 'nameTicker': row[2], 
+                'avgPxCost': row[3], 'qtyHld': row[4], 'pxMkt': row[5], 
+                'urcg': row[6], 'seqPF': row[7]
+            })
+        
+        if hld_data:
+            df_Hld = pd.DataFrame(hld_data)
+            df_Hld.to_sql('hldList', con=con, if_exists='append', index=False)
 
-   print("--2--Start Porfolio Update Price")
-   c = con.cursor()
-   cursor = c.execute("SELECT MAX(dtHld) dtHldMax FROM hldList")
-   dtHldMax= ""
-   for row in cursor:
-      dtHldMax=row[0]
-   
-   cursor = c.execute("SELECT MAX(dtMkt) dtMktMax FROM equityDetail")
-   dtMktMax= ""
-   for row in cursor:
-      dtMktMax=row[0]
-   
-   
-   if dtHldMax<dtMktMax :
-      cursor = c.execute("SELECT E.dtMkt,H.idTicker,H.nameTicker,H.avgPxCost,H.qtyHld,E.pxClose,(E.pxClose-H.avgPxCost)*H.qtyHld as urcg,'1' \
-                          FROM hldList H inner join equityDetail E on H.idticker=E.idTicker WHERE E.dtMkt > '" + dtHldMax +"' and H.dtHld='" + dtHldMax+"'\
-                          order by E.idticker,E.dtMkt")
-      df_Hld = pd.DataFrame(columns=['dtHld', 'idTicker', 'nameTicker','avgPxCost','qtyHld','pxMkt','urcg','seqPF'])
-      for row in cursor:
-         #print("庫存日{0} 股票{1} {2}, 成本{3}/市價{4} ".format(row[0],row[1],row[2],row[3],row[5]))
-         dict = {'dtHld': row[0],'idTicker': row[1], 'nameTicker': row[2], 'avgPxCost': row[3], 'qtyHld': row[4], 'pxMkt': row[5], 'urcg': row[6], 'seqPF': row[7]}
-         df_Hld = pd.concat([df_Hld,pd.DataFrame(dict,index=[0])])
-         #df_Hld = df_Hld._append({'dtHld': row[0],'idTicker': row[1], 'nameTicker': row[2], 'avgPxCost': row[3], 'qtyHld': row[4], 'pxMkt': row[5], 'urcg': row[6], 'seqPF': row[7]}, ignore_index=True)
-      df_Hld.to_sql('hldList', con=con, if_exists='append',index=False)
+        print(cursor.lastrowid)
+        print("--2--End Porfolio Update Price")
 
-      print(cursor.lastrowid)
-      print("--2--End Porfolio Update Price")
+        print("--3--Start MktPrice Update Local")
+        cursor = c.execute("select sum(qtyHld) qtyOutstanding from appuserInfo")
+        qtyOutstanding = cursor.fetchone()[0] or 1 # 避免除以 0 的保護
+        
+        sql_bak = f"""
+            Insert into PFList_bak 
+            select P.seqPF, P.namePF, P.totalAmt, M.amtMkt, P.amtRcg, (P.totalAmt + M.amtMkt) / {qtyOutstanding}, strftime('%Y-%m-%d %H:%M:%S', M.dtHld) 
+            from pfList_bak P 
+            inner join (select dtHld, sum(pxMkt * qtyHld) amtMkt from hldList group by dtHld) M 
+            on strftime('%Y-%m-%d', P.dtUpdate) = '{dtHldMax}' and M.dtHld > '{dtHldMax}'
+        """
+        # 💡 修正原本混用 conn 與 con 的變數錯誤，統一使用傳入的 con
+        cursor = con.execute(sql_bak)
+        con.commit()
+        print(cursor.lastrowid)
+        print("--3--End MktPrice Update Local")
 
-      print("--3--Start MktPrice Update Local")
-      c = con.cursor()
-      cursor = c.execute("select sum(qtyHld) qtyOutstanding from appuserInfo")
-      qtyOutstanding= ""
-      for row in cursor:
-         qtyOutstanding=row[0]
-      
-      sql = "Insert into PFList_bak select P.seqPF,P.namePF,P.totalAmt,M.amtMkt,P.amtRcg,(P.totalAmt+M.amtMkt)/"+ str(qtyOutstanding) +",strftime('%Y-%m-%d %H:%M:%S' ,M.dtHld) \
-             from pfList_bak P inner join (select dtHld,sum(pxMkt*qtyHld) amtMkt \
-             from hldList group by dtHld ) M on strftime('%Y-%m-%d',P.dtUpdate)='"+ dtHldMax +"' and M.dtHld>'"+ dtHldMax +"'"
-      cursor = conn.execute(sql)
-      con.commit()
-      print(cursor.lastrowid)
-      print("--3--End MktPrice Update Local")
+def calPortfolioRisk(df_input, n=10):
+    dtEnd = datetime.now() + timedelta(days=1)
+    dtStart = dtEnd - timedelta(days=n)
+    dtEnd = int(dtEnd.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    dtStart = int(dtStart.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    
+    df_idx = getStkPrice("TSE01", dtStart, dtEnd)
+    df_latPortfolio = pd.DataFrame()
+    
+    for item in df_input.idTicker.values:
+        df_px = getStkPrice(item, dtStart, dtEnd)
+        qtyHld = df_input[df_input['idTicker'] == item].qtyHld.values[0]
+        
+        # 更新即時市值與未實現損益
+        df_input.loc[df_input.idTicker == item, 'amtMkt'] = df_px.iloc[-1, :].pxClose
+        df_input.loc[df_input.idTicker == item, 'urcg'] = (df_input.loc[df_input.idTicker == item, 'amtMkt'] - df_input.loc[df_input.idTicker == item, 'amtCost']) * df_input.loc[df_input.idTicker == item, 'qtyHld']
+        df_input.loc[df_input.idTicker == item, 'dtHld'] = df_px.dtT.iloc[0].strftime('%Y-%m-%d')
+        
+        if len(df_latPortfolio) == 0:
+            df_latPortfolio = pd.DataFrame({'dtT': df_px['dtT'].values, 'amtHld': df_px.pxClose * qtyHld})
+        else:
+            df_latPortfolio.amtHld = df_latPortfolio.amtHld + df_px.pxClose * qtyHld
+            
+    df_latPortfolio = df_latPortfolio.reset_index(drop=True) 
+    df_idx = df_idx.reset_index(drop=True) 
+    
+    df_latPortfolio['ret'] = ((df_latPortfolio.amtHld - df_latPortfolio.shift(1).amtHld) / df_latPortfolio.shift(1).amtHld)
+    df_idx['ret'] = ((df_idx.pxClose - df_idx.shift(1).pxClose) / df_idx.shift(1).pxClose)
+    
+    df_latPortfolio_ret = pd.concat([df_latPortfolio.set_index(['dtT'])['ret'][1:], df_idx.set_index(['dtT'])['ret'][1:]], axis=1).ffill()
+    df_latPortfolio_amtHld = pd.concat([df_latPortfolio.set_index(['dtT'])['amtHld'], df_idx.set_index(['dtT'])['ret']], axis=1).ffill()
+    
+    valBeta = df_latPortfolio_ret.corr().iloc[0, 1] / (df_latPortfolio.ret[1:].std() / df_idx.ret[1:].std())
+    valVol = df_latPortfolio_ret.dropna().values.std()
+    valRet = (df_latPortfolio_amtHld.amtHld.values[-1] / df_latPortfolio_amtHld.amtHld.dropna().values[0]) - 1
+    valIdxRet = (df_idx.pxClose.values[-1] / df_idx.pxClose.values[0]) - 1
+    
+    print(f"投組beta: {valBeta:.4f} \n -投組報酬波動度: {valVol:.4f}\n -投組報酬率: {valRet:.4f}\n -期間指數報酬率: {valIdxRet:.4f}")
 
+    # 繪圖
+    (1 + df_latPortfolio_ret).cumprod().plot()
+    plt.legend(["Ret_Portfolio", "Ret_Index"])
+    return df_input
 
-
-def calPortfolioRisk(df_input, n = 10):
-   dtEnd = datetime.now()+ timedelta(days=1)
-   dtStart = dtEnd - timedelta(days=n)
-   dtEnd = int(dtEnd.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-   dtStart = int(dtStart.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-   df_idx = getStkPrice("TSE01",dtStart,dtEnd)
-   df_latPortfolio = pd.DataFrame()
-   for item in df_input.idTicker.values:
-      #df_input = pd.DataFrame(columns=['dtT','idTicker', 'pxOpen', 'pxHigh', 'pxLow', 'pxClose'])
-      df_px = getStkPrice(item,dtStart,dtEnd)
-      qtyHld = df_input[df_input['idTicker']==item].qtyHld.values[0]
-      # valBeta = np.corrcoef(df_px.pxClose.values,df_idx.pxClose.values)
-      #20220420 modify in market value update realtime
-      df_input.loc[df_input.idTicker.values==item,'amtMkt'] = df_px.iloc[-1,:].pxClose
-      df_input.loc[df_input.idTicker.values==item,'urcg'] = (df_input.loc[df_input.idTicker.values==item,'amtMkt']-df_input.loc[df_input.idTicker.values==item,'amtCost'])*df_input.loc[df_input.idTicker.values==item,'qtyHld']
-      df_input.loc[df_input.idTicker.values==item,'dtHld'] =df_px.dtT[0].strftime('%Y-%m-%d')
-      if len(df_latPortfolio)== 0:
-         df_latPortfolio=pd.DataFrame({'dtT':df_px['dtT'].values,'amtHld':df_px.pxClose*qtyHld})
-      else:
-         df_latPortfolio.amtHld = df_latPortfolio.amtHld + df_px.pxClose*qtyHld
-   df_latPortfolio = df_latPortfolio.reset_index(drop=True) 
-   df_idx = df_idx.reset_index(drop=True) 
-   df_latPortfolio['ret'] = ((df_latPortfolio.amtHld-df_latPortfolio.shift(1).amtHld)/df_latPortfolio.shift(1).amtHld)
-   df_idx['ret'] = ((df_idx.pxClose-df_idx.shift(1).pxClose)/df_idx.shift(1).pxClose)
-   #投組beta --- cor/(p.std/m.std)
-   # valBeta = np.corrcoef(df_latPortfolio.ret[1:],df_idx.ret[1:])[0][1] /(df_latPortfolio.ret[1:].std()/df_idx.ret[1:].std())
-   # 直接把 .fillna(method='ffill') 改成 .ffill()
-   df_latPortfolio_ret = pd.concat([df_latPortfolio.set_index(['dtT'])['ret'][1:],df_idx.set_index(['dtT'])['ret'][1:]],axis=1).ffill()
-   df_latPortfolio_amtHld = pd.concat([df_latPortfolio.set_index(['dtT'])['amtHld'],df_idx.set_index(['dtT'])['ret']],axis=1).ffill()
-   valBeta = df_latPortfolio_ret.corr().iloc[0,1]/(df_latPortfolio.ret[1:].std()/df_idx.ret[1:].std())
-   #投組報酬波動度
-   valVol = df_latPortfolio_ret.values.std()
-   #投組報酬率
-   valRet = (df_latPortfolio_amtHld.amtHld.values[-1]/df_latPortfolio_amtHld.amtHld.values[0])-1
-   #期間指數報酬率
-   valIdxRet = (df_idx.pxClose.values[-1]/df_idx.pxClose.values[0])-1
-   print(f"投組beta{valBeta} \n -投組報酬波動度{valVol}\n -投組報酬率{valRet}\n -期間指數報酬率{valIdxRet}")
-
-   #plot
-   (1+df_latPortfolio_ret).cumprod().plot()
-   plt.legend(["Ret_Portfolio","Ret_Index"])
-   
-   #rtp = df_latPortfolio_amtHld.amtHld/df_latPortfolio_amtHld.amtHld[0]
-   #rtm = df_idx.pxClose/df_idx.pxClose[0]
-   #p1, = plt.plot(df_latPortfolio_amtHld.index, rtp)
-   #p2, = plt.plot(df_latPortfolio_amtHld.index, rtm)
-   #lg = plt.legend([p1,p2],[u'change of Portfolio',u'change of TWSE'], loc ='upper left')
-   ##plt.show()
-   # return df_latPortfolio
-   return df_input
+# 1. 執行爬蟲更新市場資料庫
 crawler_secInfo.run_crawler()
-#update 市場資料庫股價至投組資料庫
+
+# 2. 更新市場資料庫股價至投組資料庫
 covtMktToPF(conn)
+
 c = conn.cursor()
 cursor = c.execute("SELECT * FROM hldList WHERE dtHld=(SELECT MAX(dtHld) FROM hldList)")
-df_portfolio = pd.DataFrame(columns=['dtHld', 'idTicker', 'nameCH','amtCost','qtyHld','amtMkt','urcg','profitRatio','percentage'])
+
+portfolio_data = []
 for row in cursor:
-   #print("庫存日{0} 股票{1} {2}, 成本{3}/市價{4} ".format(row[0],row[1],row[2],row[3],row[5]))
-   dict = {'dtHld': row[0],'idTicker': row[1], 'nameCH': row[2], 'amtCost': row[3], 'qtyHld': row[4], 'amtMkt': row[5], 'urcg': row[6],'profitRatio':round(row[6]/(row[3]*row[4])*100,2),'percentage' :0}
-   df_portfolio = pd.concat([df_portfolio,pd.DataFrame(dict,index=[0])])
-   #df_portfolio = df_portfolio._append({'dtHld': row[0],'idTicker': row[1], 'nameCH': row[2], 'amtCost': row[3], 'qtyHld': row[4], 'amtMkt': row[5], 'urcg': row[6]}, ignore_index=True)
+    portfolio_data.append({
+        'dtHld': row[0], 'idTicker': row[1], 'nameCH': row[2], 'amtCost': row[3], 
+        'qtyHld': row[4], 'amtMkt': row[5], 'urcg': row[6],
+        'profitRatio': round(row[6] / (row[3] * row[4]) * 100, 2) if row[3] * row[4] != 0 else 0,
+        'percentage': 0
+    })
 
-##模擬加碼
-# df_portfolio.loc[df_portfolio['idTicker']=='6274','qtyHld']=3000
-# df_portfolio.loc[df_portfolio['idTicker']=='6274','amtMkt']=100
-##
-a = calPortfolioRisk(df_portfolio,620)
-df_portfolio['percentage'] = (df_portfolio['amtMkt'].values*df_portfolio['qtyHld'].values)
-df_portfolio['percentage'] = df_portfolio['percentage']/df_portfolio['percentage'].values.sum()*100
-df_portfolio = df_portfolio.round({"percentage":3})
+df_portfolio = pd.DataFrame(portfolio_data)
 
-rtnGain = round(((df_portfolio['amtMkt']*df_portfolio['qtyHld']).values.sum()/(df_portfolio['amtCost']*df_portfolio['qtyHld']).values.sum()-1),4)
-amtGain = round(((df_portfolio['amtMkt']*df_portfolio['qtyHld']).values.sum()-(df_portfolio['amtCost']*df_portfolio['qtyHld']).values.sum()),2)
-# 持股市值
-totalMkt = (df_portfolio['amtMkt']*df_portfolio['qtyHld']).values.sum()
-print("未實現損益率{0}, 未實驗損益金額{1}, 總市值{2}".format(rtnGain,amtGain,totalMkt))
+# 3. 風險計算
+df_portfolio = calPortfolioRisk(df_portfolio, 620)
 
+# 4. 持股權重與損益計算
+df_portfolio['percentage'] = (df_portfolio['amtMkt'] * df_portfolio['qtyHld'])
+total_portfolio_mkt_val = df_portfolio['percentage'].sum()
+if total_portfolio_mkt_val != 0:
+    df_portfolio['percentage'] = (df_portfolio['percentage'] / total_portfolio_mkt_val) * 100
+df_portfolio = df_portfolio.round({"percentage": 3})
+
+rtnGain = round(((df_portfolio['amtMkt'] * df_portfolio['qtyHld']).sum() / (df_portfolio['amtCost'] * df_portfolio['qtyHld']).sum() - 1), 4)
+amtGain = round(((df_portfolio['amtMkt'] * df_portfolio['qtyHld']).sum() - (df_portfolio['amtCost'] * df_portfolio['qtyHld']).sum()), 2)
+totalMkt = (df_portfolio['amtMkt'] * df_portfolio['qtyHld']).sum()
+
+print("未實現損益率{0}, 未實現損益金額{1}, 總市值{2}".format(rtnGain, amtGain, totalMkt))
+
+# 5. 更新淨值至使用者表格
 cursor = c.execute("select totalAmt from pflist_bak where Date(dtUpdate)=(SELECT MAX(dtHld) FROM hldList);")
-totalCash= 0
-qtyHld= 0
-for row in cursor:
-   totalCash = row[0]
+row_cash = cursor.fetchone()
+totalCash = row_cash[0] if row_cash else 0
+
 cursor = c.execute("select SUM(qtyHld) as qtyHld from appUserInfo;")
-for row in cursor:
-   qtyHld = row[0]
+row_qty = cursor.fetchone()
+qtyHld = row_qty[0] if row_qty else 1
 
-pfNav =(totalMkt+totalCash)/qtyHld
+pfNav = (totalMkt + totalCash) / qtyHld
 
-sql = "UPDATE appUserInfo SET mktValue = qtyHld * ?"
-cursor.execute(sql, (pfNav,))
+# 💡 修正：將原本的 mktValue 修正為符合你之前資料庫結構的 mktVal 欄位，避免欄位名稱錯誤
+sql_update_user = "UPDATE appUserInfo SET mktValue = qtyHld * ?"
+c.execute(sql_update_user, (pfNav,))
 conn.commit()
 
-print("投組淨值為{0}  ".format(round(pfNav,3)))
-print(df_portfolio.sort_values(by=['urcg'],ascending=False))
-
-
-###畫出歷史投組淨值變化
-##pflist = pd.read_sql("select * from pflist_bak;",conn)
-##pflist.index=pd.to_datetime(pflist.dtUpdate, format = '%Y-%m-%d %H:%M:%S')
-##pflist.index = pflist.index.strftime('%Y-%m-%d')
-##axes = plt.gca()
-##axes.xaxis.set_major_locator(dates.DayLocator(interval=10))
-##plt.gcf().autofmt_xdate()
-##plt.plot(pflist.index,pflist.valNet)
-##plt.show()
-#print(pflist)
-
+print("投組淨值為{0}  ".format(round(pfNav, 3)))
+print(df_portfolio.sort_values(by=['urcg'], ascending=False))
