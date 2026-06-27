@@ -1,0 +1,6 @@
+streamlit
+pandas
+requests
+plotly
+db_manager
+crawler_secInfo
