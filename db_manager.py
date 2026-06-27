@@ -3,11 +3,11 @@ import os
 import sqlite3
 
 def check_is_cloud():
-    """檢查是否在 Google Cloud 環境"""
+    """檢查是否在 Google Cloud 環境 (相容 Cloud Run 與 Cloud Shell)"""
     conditions = [
-        os.getenv('GOOGLE_CLOUD_PROJECT'),
-        os.getenv('DEVSHELL_PROJECT_ID'),
-        os.getenv('GOOGLE_CLOUD_QUICKSTART_PROJECT')
+        os.getenv('K_SERVICE'),                   # 💡 Cloud Run 專屬特徵
+        os.getenv('GOOGLE_CLOUD_PROJECT'),        # Cloud Shell 專屬
+        os.getenv('DEVSHELL_PROJECT_ID')
     ]
     return any(cond is not None for cond in conditions)
 
@@ -20,8 +20,18 @@ def get_connection(idConn):
     is_cloud = check_is_cloud()
     
     if is_cloud:
-        base_dir = "./" 
-        print("--- 偵測到環境：Google Cloud Shell ---")
+        # 💡 在 Cloud Run 環境下，唯有 /tmp 目錄具備可讀寫權限
+        base_dir = "/tmp/" 
+        print("--- 偵測到環境：Google Cloud (Cloud Run / Shell) ---")
+        
+        # 💡 安全防護：如果雲端 /tmp 內還沒有這兩個 db 檔，自動觸發建立空的檔案
+        # 避免後續 sqlite3.connect 或 ATTACH 時因為檔案不存在而噴錯
+        for db_name in ['FP.db', 'MDEngine.db']:
+            db_file_path = os.path.join(base_dir, db_name)
+            if not os.path.exists(db_file_path):
+                # 建立空檔案
+                open(db_file_path, 'a').close()
+                print(f"已在雲端臨時目錄初始化空白檔案: {db_name}")
     else:
         base_dir = '/Users/jonathantz/Documents/Project/Database/'
         print("--- 偵測到環境：Mac Local ---")
@@ -31,7 +41,7 @@ def get_connection(idConn):
 
     if idConn == 1:
         conn = sqlite3.connect(fp_path)
-        # 修正：加上對應，避免在多線程或跨檔案時因為庫名大小寫誤判
+        # 加上對應，避免在多線程或跨檔案時因為庫名大小寫誤判
         conn.execute(f'ATTACH "{md_engine_path}" AS MDEngine')
         return conn
     else:
