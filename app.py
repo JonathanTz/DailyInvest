@@ -120,9 +120,70 @@ def run_full_analysis(trigger_crawler=False):
     conn = get_connection(1)
     c = conn.cursor()
 
+    # 💡 智慧防護：確保基本的資料表存在，如果不存在則自動在雲端臨時庫建立
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS hldList (
+            dtHld TEXT, idTicker TEXT, nameTicker TEXT, 
+            avgPxCost REAL, qtyHld REAL, pxMkt REAL, urcg REAL, seqPF TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS appUserInfo (
+            idUser TEXT, idTicker TEXT, qtyHld REAL, mktValue REAL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS equityDetail (
+            idTicker TEXT, nameTicker TEXT, pxClose REAL, dtMkt TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pfList_bak (
+            seqPF TEXT, namePF TEXT, totalAmt REAL, amtMkt REAL, amtRcg REAL, pfNav REAL, dtUpdate TEXT
+        )
+    """)
+    conn.commit()
+
+    # 💡 初始數據注入：如果發現使用者持股清單全新空白，主動塞入您的個人庫存設定
+    check_user_empty = c.execute("SELECT COUNT(*) FROM appUserInfo").fetchone()[0]
+    if check_user_empty == 0:
+        # 1. 注入 appUserInfo
+        initial_shares = [
+            ('jonathan', '6274', 1800, 0),
+            ('jonathan', '2327', 500, 0),
+            ('jonathan', '2454', 70, 0),
+            ('jonathan', '3587', 2000, 0),
+            ('jonathan', '0050', 1980, 0),
+            ('jonathan', '2441', 500, 0),
+            ('jonathan', '2313', 2700, 0),
+        ]
+        c.executemany("INSERT INTO appUserInfo (idUser, idTicker, qtyHld, mktValue) VALUES (?, ?, ?, ?)", initial_shares)
+        
+        # 2. 注入 hldList（提供爬蟲前的基礎計算成本）
+        initial_hld = [
+            ('2024-10-15', '6274', '台燿', 293.445, 1800, 0, 0, '1'),
+            ('2024-10-15', '2327', '國巨', 406.346, 500, 0, 0, '1'),
+            ('2024-10-15', '2454', '聯發科', 1090.73, 70, 0, 0, '1'),
+            ('2024-10-15', '3587', '閎康', 210.2985, 2000, 0, 0, '1'),
+            ('2024-10-15', '0050', '元大台灣50', 59.749, 1980, 0, 0, '1'),
+            ('2024-10-15', '2441', '超豐', 93.678, 500, 0, 0, '1'),
+            ('2024-10-15', '2313', '華通', 222.6715, 2700, 0, 0, '1'),
+        ]
+        c.executemany("INSERT INTO hldList (dtHld, idTicker, nameTicker, avgPxCost, qtyHld, pxMkt, urcg, seqPF) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", initial_hld)
+        
+        # 3. 注入 pfList_bak 初始化一筆資產對照
+        c.execute("INSERT INTO pfList_bak (seqPF, namePF, totalAmt, amtMkt, amtRcg, pfNav, dtUpdate) VALUES ('1', 'MyPF', 0, 0, 0, 1, '2024-10-15 00:00:00')")
+        conn.commit()
+
     if trigger_crawler:
         crawler_secInfo.run_crawler()
         covtMktToPF(conn)
+
+    # 檢查注入或爬蟲後，hldList 中是否具備可供分析的數據
+    check_empty = c.execute("SELECT COUNT(*) FROM hldList").fetchone()[0]
+    if check_empty == 0:
+        conn.close()
+        return None, 0, None, 0, 0, 0, 0, "全新環境（等待爬蟲）"
 
     cursor = c.execute("SELECT * FROM hldList WHERE dtHld=(SELECT MAX(dtHld) FROM hldList)")
     portfolio_data = []
@@ -136,6 +197,7 @@ def run_full_analysis(trigger_crawler=False):
 
     df_portfolio = pd.DataFrame(portfolio_data)
     if df_portfolio.empty:
+        conn.close()
         return None, 0, None, 0, 0, 0, 0, "無資料"
 
     df_portfolio, valBeta, cum_ret_df = calPortfolioRisk(df_portfolio, 620)
@@ -160,7 +222,7 @@ def run_full_analysis(trigger_crawler=False):
     c.execute("UPDATE appUserInfo SET mktValue = qtyHld * ?", (pfNav,))
     conn.commit()
     
-    # 順便抓出當前資料庫最新日期
+    # 抓出當前資料庫最新日期
     latest_db_date = df_portfolio['dtHld'].max()
     conn.close()
 
@@ -170,7 +232,7 @@ def run_full_analysis(trigger_crawler=False):
 # 💡 智慧檢查：判斷資料庫是否需要更新
 # =====================================================================
 def check_if_update_needed(db_date_str):
-    if db_date_str == "無資料":
+    if db_date_str in ["無資料", "全新環境（等待爬蟲）"]:
         return True
     
     try:
@@ -181,15 +243,13 @@ def check_if_update_needed(db_date_str):
     today = datetime.now().date()
     
     # 計算理論上應該要有的最新資料日期（排除週末）
-    # 如果今天是週六，最新資料應該是週五；今天是週日或週一開盤前，最新也應該是週五
     if today.weekday() == 5:    # 週六
         expected_date = today - timedelta(days=1)
     elif today.weekday() == 6:  # 週日
         expected_date = today - timedelta(days=2)
-    elif today.weekday() == 0 and datetime.now().hour < 14: # 週一開盤前/盤中
+    elif today.weekday() == 0 and datetime.now().hour < 14: # 週一開盤前
         expected_date = today - timedelta(days=3)
     else:
-        # 平日 14:00 前可能還沒收盤更新，預設為昨天
         expected_date = today if datetime.now().hour >= 14 else today - timedelta(days=1)
         
     return db_date < expected_date
@@ -209,7 +269,6 @@ need_update = check_if_update_needed(db_date_str)
 
 if need_update:
     st.sidebar.warning("⚠️ 資料庫非最新狀態，建議更新。")
-    # 只有需要更新時，按鈕會呈現醒目的紅色/主色調類型
     if st.sidebar.button("🚀 執行爬蟲更新最新數據", type="primary"):
         st.cache_data.clear() # 清除快取
         with st.spinner("正在執行完整爬蟲更新中..."):
@@ -218,7 +277,6 @@ if need_update:
         st.rerun()
 else:
     st.sidebar.success("✅ 資料庫已是最新狀態，無需更新。")
-    # 雖然資料最新，還是留一個普通按鈕防萬一
     if st.sidebar.button("🔄 強制重新爬蟲"):
         st.cache_data.clear()
         with st.spinner("正在強制更新中..."):
@@ -267,4 +325,4 @@ if df is not None:
     st.subheader("📋 詳細持股明細")
     st.dataframe(df.sort_values(by=['urcg'], ascending=False).reset_index(drop=True), use_container_width=True)
 else:
-    st.error("暫無投組資料，請點擊左側按鈕執行爬蟲與計算。")
+    st.info("💡 偵測到雲端為全新初始環境。請點擊左側「🚀 執行爬蟲更新最新數據」按鈕載入您的持股數據與最新市價。")
