@@ -113,13 +113,14 @@ def calPortfolioRisk(df_input, n=10):
     df_latPortfolio = pd.DataFrame()
     
     for item in df_input.idTicker.values:
-        df_px = getStkPrice(item, dtStart, dtEnd)
+        df_px = getStkPrice(item, dtStart, dtEnd).sort_values('dtT').reset_index(drop=True)
         qtyHld = df_input[df_input['idTicker'] == item].qtyHld.values[0]
         
         # 更新即時市值與未實現損益
-        df_input.loc[df_input.idTicker == item, 'amtMkt'] = df_px.iloc[-1, :].pxClose
-        df_input.loc[df_input.idTicker == item, 'urcg'] = (df_input.loc[df_input.idTicker == item, 'amtMkt'] - df_input.loc[df_input.idTicker == item, 'amtCost']) * df_input.loc[df_input.idTicker == item, 'qtyHld']
-        df_input.loc[df_input.idTicker == item, 'dtHld'] = df_px.dtT.iloc[0].strftime('%Y-%m-%d')
+        latest_px = df_px.iloc[-1]
+        df_input.loc[df_input.idTicker == item, 'amtMkt'] = latest_px.pxClose
+        df_input.loc[df_input.idTicker == item, 'urcg'] = ((latest_px.pxClose - df_input.loc[df_input.idTicker == item, 'amtCost'])* df_input.loc[df_input.idTicker == item, 'qtyHld'])
+        df_input.loc[df_input.idTicker == item, 'dtHld'] = latest_px.dtT.strftime('%Y-%m-%d')
         
         if len(df_latPortfolio) == 0:
             df_latPortfolio = pd.DataFrame({'dtT': df_px['dtT'].values, 'amtHld': df_px.pxClose * qtyHld})
